@@ -1,0 +1,153 @@
+stages:
+- stage: BuildServer
+  jobs:
+  - job: Buildserver
+
+    pool:
+      name: MyHostedAgents
+
+    steps:
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '3.10'
+
+    - script: |
+        pip install -r server/requirements.txt
+      displayName: 'Install requirements'
+
+    - script: |
+        mkdir -p $(Build.ArtifactStagingDirectory)/server
+        cp -r server/* $(Build.ArtifactStagingDirectory)/server
+      displayName: 'Copy Files to Artifact Staging Directory'
+
+    - task: ArchiveFiles@2
+      inputs:
+        rootFolderOrFile: '$(Build.ArtifactStagingDirectory)/server'
+        includeRootFolder: false
+        archiveType: 'zip'
+        archiveFile: '$(Build.ArtifactStagingDirectory)/server.zip'
+        replaceExistingArchive: true
+      displayName: 'Create Zip File'
+
+    - publish: $(Build.ArtifactStagingDirectory)/server.zip
+      artifact: server
+      displayName: 'Publish Artifact'
+
+- stage: TestServer
+  jobs:
+  - job: Buildserver
+    workspace:
+      clean: all
+
+    pool:
+      name: MyHostedAgents
+
+    steps:
+    - task: DownloadPipelineArtifact@2
+      inputs:
+        buildType: current
+        artifactName: 'server'
+        targetPath: '$(Pipeline.Workspace)/server-app'
+
+    - task: ExtractFiles@1
+      inputs:
+        archiveFilePatterns: '$(Pipeline.Workspace)/server-app/*.zip'
+        destinationFolder: 'server-app'
+        cleanDestinationFolder: true
+        overwriteExistingFiles: true
+  
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '3.10'
+
+    - script: |
+        pip install -r server-app/requirements.txt
+      displayName: 'Install requirements'
+    
+
+    - task: PythonScript@0
+      inputs:
+        scriptSource: 'filePath'
+        scriptPath: 'server-app/test_server.py'
+      displayName: 'Test App'
+
+- stage: DeployServerOnPremise
+  dependsOn: TestServer
+  jobs:
+  - deployment: DeployServerOnPremise
+    environment: 
+      name: 'Production'
+      resourceType: VirtualMachine
+      tags: zotpc
+    
+    workspace:
+      clean: all
+
+    pool:
+      name: MyHostedAgents
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: '3.10'
+
+          - task: DownloadPipelineArtifact@2
+            inputs:
+              buildType: 'current'
+              artifactName: 'server'
+              targetPath: '$(Pipeline.Workspace)/'
+
+          - task: ExtractFiles@1
+            inputs:
+              archiveFilePatterns: '$(Pipeline.Workspace)/*.zip'
+              destinationFolder: 'server-app'
+              cleanDestinationFolder: true
+              overwriteExistingFiles: true
+
+          - script: |
+              pip install -r server-app/requirements.txt
+              cd server-app
+              pm2 startOrReload ecosystem.config.js --env production
+            displayName: 'Deploy and Start Web server'
+
+- stage: DeployServerOnAzure
+  dependsOn: TestServer
+  jobs:
+  - deployment: DeployServerOnAzure
+    environment: 
+      name: 'Production'
+    
+    workspace:
+      clean: all
+
+    pool:
+      vmImage: 'ubuntu-latest'
+      
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: '3.10'
+
+          - task: DownloadPipelineArtifact@2
+            inputs:
+              buildType: 'current'
+              artifactName: 'server'
+              targetPath: '$(Pipeline.Workspace)/'
+
+          - task: AzureRmWebAppDeployment@4
+            inputs:
+              ConnectionType: 'AzureRM'
+              azureSubscription: 'DZDevelopment (9c65865e-cff3-4c1a-83dc-3ebc02089819)'
+              appType: 'webAppLinux'
+              WebAppName: 'more-eval-server-app'
+              packageForLinux: '$(Pipeline.Workspace)/*.zip'
+              RuntimeStack: 'PYTHON|3.10'
+
+
+

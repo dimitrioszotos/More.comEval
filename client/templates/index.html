@@ -1,0 +1,17 @@
+<!-- templates/index.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Status Check</title>
+</head>
+<body>
+    <h1>Check Server Status</h1>
+    <form action="/check_status" method="post">
+        <button type="submit">Check Status</button>
+    </form>
+    {% if status_code %}
+        <h2>Status Code: {{ status_code }}</h2>
+        <p>{{ message }}</p>
+    {% endif %}
+</body>
+</html>

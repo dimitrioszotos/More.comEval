@@ -1,0 +1,152 @@
+stages:
+- stage: BuildClient
+  jobs:
+  - job: BuildClient
+
+    pool:
+      name: MyHostedAgents
+
+    steps:
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '3.10'
+
+    - script: |
+        pip install -r client/requirements.txt
+      displayName: 'Install requirements'
+
+    - script: |
+        mkdir -p $(Build.ArtifactStagingDirectory)/client
+        cp -r client/* $(Build.ArtifactStagingDirectory)/client
+      displayName: 'Copy Files to Artifact Staging Directory'
+
+    - task: ArchiveFiles@2
+      inputs:
+        rootFolderOrFile: '$(Build.ArtifactStagingDirectory)/client'
+        includeRootFolder: false
+        archiveType: 'zip'
+        archiveFile: '$(Build.ArtifactStagingDirectory)/client.zip'
+        replaceExistingArchive: true
+      displayName: 'Create Zip File'
+
+    - publish: $(Build.ArtifactStagingDirectory)/client.zip
+      artifact: client
+      displayName: 'Publish Artifact'
+
+- stage: TestClient
+  jobs:
+  - job: TestClient
+    workspace:
+      clean: all
+
+    pool:
+      name: MyHostedAgents
+
+    steps:
+    - task: DownloadPipelineArtifact@2
+      inputs:
+        buildType: current
+        artifactName: 'client'
+        targetPath: '$(Pipeline.Workspace)/client-app'
+
+    - task: ExtractFiles@1
+      inputs:
+        archiveFilePatterns: '$(Pipeline.Workspace)/client-app/*.zip'
+        destinationFolder: 'client-app'
+        cleanDestinationFolder: true
+        overwriteExistingFiles: true
+  
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '3.10'
+
+    - script: |
+        pip install -r client-app/requirements.txt
+      displayName: 'Install requirements'
+    
+
+    - task: PythonScript@0
+      inputs:
+        scriptSource: 'filePath'
+        scriptPath: 'client-app/test_client.py'
+      displayName: 'Test App'
+
+- stage: DeployClientOnPrem
+  dependsOn: TestClient
+  jobs:
+  - deployment: DeployClientOnPrem
+    environment: 
+      name: 'Production'
+      resourceType: VirtualMachine
+      tags: zotpc
+
+    pool:
+      name: MyHostedAgents
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: '3.10'
+
+          - task: DownloadPipelineArtifact@2
+            inputs:
+              buildType: 'current'
+              artifactName: 'client'
+              targetPath: '$(Pipeline.Workspace)/'
+
+          - task: ExtractFiles@1
+            inputs:
+              archiveFilePatterns: '$(Pipeline.Workspace)/*.zip'
+              destinationFolder: 'client-app'
+              cleanDestinationFolder: true
+              overwriteExistingFiles: true
+
+          - script: |
+              pip install -r client-app/requirements.txt
+              cd client-app
+              pm2 startOrReload ecosystem.config.js --env production
+            displayName: 'Deploy and Start Web Server'
+            
+- stage: DeployClientOnAzure
+  dependsOn: TestClient
+  jobs:
+  - deployment: DeployClientOnAzure
+    environment: 
+      name: 'Production'
+    
+    workspace:
+      clean: all
+
+    pool:
+      vmImage: 'ubuntu-latest'
+      
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: '3.10'
+
+          - task: DownloadPipelineArtifact@2
+            inputs:
+              buildType: 'current'
+              artifactName: 'client'
+              targetPath: '$(Pipeline.Workspace)/'
+
+          - task: AzureRmWebAppDeployment@4
+            inputs:
+              ConnectionType: 'AzureRM'
+              azureSubscription: 'DZDevelopment (9c65865e-cff3-4c1a-83dc-3ebc02089819)'
+              appType: 'webAppLinux'
+              WebAppName: 'more-eval-client-app'
+              packageForLinux: '$(Pipeline.Workspace)/*.zip'
+              RuntimeStack: 'PYTHON|3.10'
+
+
+
+      
+
